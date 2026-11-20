@@ -9,13 +9,17 @@ from sqlalchemy.orm import Session
 
 from . import models, schemas
 from .calc import calories_burned, calories_eaten
-from .database import Base, engine, get_db
+from .database import Base, engine, get_db, get_schema_engine
 from .seed import seed
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    seed(engine)
+    schema_engine = get_schema_engine()
+    Base.metadata.create_all(bind=schema_engine)
+    seed(schema_engine)
+    if schema_engine is not engine:
+        schema_engine.dispose()
     yield
 
 

@@ -59,7 +59,12 @@ Tables are created automatically when the backend starts, and `foods` / `exercis
    ```
 
 The backend reads `DATABASE_URL` if it is set; otherwise it builds the URL from the `POSTGRES_*`
-variables (plus optional `POSTGRES_HOST`, `POSTGRES_PORT`). The frontend calls `/api`, which Vite
+variables (plus optional `POSTGRES_HOST`, `POSTGRES_PORT`). Locally, `.env` has no `DATABASE_URL`,
+so the backend uses the Docker database.
+
+**Production database (Neon):** `neon env pull --file .env.neon` writes the Neon connection strings
+to `.env.neon` (git-ignored). On the hosting service set both `DATABASE_URL` (pooled, used for app
+queries) and `DATABASE_URL_UNPOOLED` (direct, used only to create tables at startup). The frontend calls `/api`, which Vite
 forwards to the backend; set `VITE_API_URL` to point it somewhere else.
 
 ## Tests

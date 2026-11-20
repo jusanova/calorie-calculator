@@ -4,6 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import NullPool
 
 # Load the .env file from the project root (one level above backend/)
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -32,6 +33,19 @@ def get_database_url() -> str:
 
 # pool_pre_ping: cloud databases close idle connections, so check them before use
 engine = create_engine(get_database_url(), pool_pre_ping=True)
+
+
+def get_schema_engine():
+    """Engine for creating tables at startup.
+
+    On Neon, DATABASE_URL goes through the connection pooler (PgBouncer, transaction
+    mode), which is meant for app queries; schema changes should use the direct
+    connection in DATABASE_URL_UNPOOLED. Locally (Docker) there is only one URL.
+    """
+    direct = os.getenv("DATABASE_URL_UNPOOLED")
+    if not direct:
+        return engine
+    return create_engine(normalize_database_url(direct), poolclass=NullPool)
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 
 

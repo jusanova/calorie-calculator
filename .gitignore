@@ -154,3 +154,4 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.db
+.neon
