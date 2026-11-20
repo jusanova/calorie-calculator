@@ -1,0 +1,121 @@
+name: CI/CD
+
+# Pull requests: tests only.
+# Push to main: tests -> deploy backend (Render) -> deploy frontend (GitHub Pages).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Only one deploy at a time; a newer push to main replaces a waiting run.
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: backend/.python-version
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: pytest
+
+  frontend-tests:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  deploy-backend:
+    name: Deploy backend (Render)
+    needs: [backend-tests, frontend-tests]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check configuration
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          API_URL: ${{ vars.VITE_API_URL }}
+        run: |
+          [ -n "$HOOK" ] || { echo "::error::Secret RENDER_DEPLOY_HOOK is not set"; exit 1; }
+          [ -n "$API_URL" ] || { echo "::error::Variable VITE_API_URL is not set"; exit 1; }
+
+      - name: Trigger Render deploy
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: curl -fsS -X POST "$HOOK" > /dev/null
+
+      - name: Wait until the new version is live
+        env:
+          HEALTH_URL: ${{ vars.VITE_API_URL }}/health
+          SHA: ${{ github.sha }}
+        run: |
+          # Render builds take a few minutes on the free plan; wait up to ~12 min.
+          for i in $(seq 1 72); do
+            body=$(curl -fsS --max-time 30 "$HEALTH_URL" || true)
+            commit=$(echo "$body" | jq -r '.commit // empty' 2>/dev/null || true)
+            if [ "$commit" = "$SHA" ]; then
+              echo "Backend is live on $SHA"
+              exit 0
+            fi
+            echo "Attempt $i: live commit is '${commit:-unknown}', waiting..."
+            sleep 10
+          done
+          echo "::error::Backend did not come up on commit $SHA in time. Check the Render dashboard logs."
+          exit 1
+
+  deploy-frontend:
+    name: Deploy frontend (GitHub Pages)
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
