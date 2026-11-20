@@ -55,23 +55,34 @@ jobs:
     needs: [backend-tests, frontend-tests]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      api_url: ${{ steps.config.outputs.api_url }}
     steps:
       - name: Check configuration
+        id: config
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
-          API_URL: ${{ vars.VITE_API_URL }}
+          RAW_API_URL: ${{ vars.VITE_API_URL }}
         run: |
           [ -n "$HOOK" ] || { echo "::error::Secret RENDER_DEPLOY_HOOK is not set"; exit 1; }
+          # Remove spaces/newlines/quotes picked up when pasting, and a trailing slash
+          API_URL=$(printf '%s' "$RAW_API_URL" | tr -d '[:space:]"'"'" | sed 's:/*$::')
           [ -n "$API_URL" ] || { echo "::error::Variable VITE_API_URL is not set"; exit 1; }
+          if ! [[ "$API_URL" =~ ^https://[A-Za-z0-9.-]+/api$ ]]; then
+            echo "::error::VITE_API_URL must look like https://<service>.onrender.com/api (got: '$API_URL')"
+            exit 1
+          fi
+          echo "Using API URL: $API_URL"
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
 
       - name: Trigger Render deploy
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
-        run: curl -fsS -X POST "$HOOK" > /dev/null
+        run: curl -fsS -X POST "$(printf '%s' "$HOOK" | tr -d '[:space:]')" > /dev/null
 
       - name: Wait until the new version is live
         env:
-          HEALTH_URL: ${{ vars.VITE_API_URL }}/health
+          HEALTH_URL: ${{ steps.config.outputs.api_url }}/health
           SHA: ${{ github.sha }}
         run: |
           # Render builds take a few minutes on the free plan; wait up to ~12 min.
@@ -112,7 +123,7 @@ jobs:
       - run: npm ci
       - run: npm run build
         env:
-          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_API_URL: ${{ needs.deploy-backend.outputs.api_url }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
